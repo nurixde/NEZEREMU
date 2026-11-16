@@ -17,11 +17,13 @@ const QJsonObject& SettingsStore::defaults() {
         o["perf.mode"] = "performance"; o["perf.cores"] = qBound(2, n - 2, 8); o["perf.ramMb"] = 6144;
         o["perf.fps"] = 60; o["perf.highPriority"] = true; o["perf.showFps"] = true;
         o["screen.width"] = 1920; o["screen.height"] = 1080; o["screen.dpi"] = 320; o["screen.orientation"] = "landscape";
-        o["gfx.mode"] = "host";
+        o["gfx.mode"] = "host"; o["gfx.bsRenderer"] = "dx";
         o["input.sensX"] = 1.0; o["input.sensY"] = 1.0; o["input.adsMul"] = 0.6; o["input.dpi"] = 800;
         o["input.smoothing"] = false; o["input.smoothStrength"] = 30; o["input.captureKey"] = "`"; o["input.profile"] = "Default";
         o["android.image"] = "google_apis_playstore"; o["android.api"] = 34; o["android.coldBoot"] = false; o["android.wipeNext"] = false;
+        o["bs.instance"] = ""; o["bs.applySettings"] = true;
         o["appearance.mainWallpaper"] = ""; o["appearance.lockWallpaper"] = ""; o["appearance.accent"] = "#8b5cf6"; o["appearance.dockOpacity"] = 88;
+        o["appearance.style"] = "violet";
         o["update.repo"] = "";
         return o;
     }();

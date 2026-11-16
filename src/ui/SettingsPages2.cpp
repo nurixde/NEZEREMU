@@ -61,8 +61,8 @@ QWidget* SettingsDialog::pageInput() {
 
     auto* t = new Card("monitor", "Задержка и точность");
     m_latency = t->addNote({}); m_accuracy = t->addNote({});
-    t->addNote("Замер включает обработку в NEZER EMU и доставку события в эмулятор. Время отрисовки кадра в игре сюда не входит.");
-    auto* tr = new QHBoxLayout; auto* reset = new QPushButton("Сбросить статистику"); auto* calib = new QPushButton("Проверить касание");
+    t->addNote("С BlueStacks клавиатура и мышь идут напрямую в его окно, а раскладка клавиш для игр настраивается в редакторе BlueStacks (Ctrl+Shift+A).");
+    auto* tr = new QHBoxLayout; auto* reset = new QPushButton("Сбросить статистику"); auto* calib = new QPushButton("Показать касания");
     tr->addWidget(reset); tr->addWidget(calib); t->body()->addLayout(tr);
     auto* abs = new QComboBox; abs->addItem("Пиксели экрана", 0); abs->addItem("0–32767", 32767);
     abs->setCurrentIndex(qMax(0, abs->findData(m_s->value("input.absMax", 0).toInt())));
@@ -72,21 +72,19 @@ QWidget* SettingsDialog::pageInput() {
     connect(calib, &QPushButton::clicked, this, [this] {
         if (m_e->state() != AndroidEngine::State::Ready) { QMessageBox::information(this, "NEZER EMU", "Сначала запустите Android."); return; }
         m_e->adb()->shell("settings put system pointer_location 1", nullptr);
-        if (m_g) m_g->tapCenterForCalibration();
-        QMessageBox::information(this, "NEZER EMU", "На экране Android включено отображение касаний, и отправлено касание в центр. Если отметка не в центре — смените «Координаты касаний» и повторите.\nОтключить отображение: Настройки Android → Для разработчиков → Отображать касания.");
+        QMessageBox::information(this, "NEZER EMU", "На экране Android включено отображение касаний.\nОтключить: Настройки Android → Для разработчиков → Отображать касания.");
     });
 
     auto* p = new Card("keyboard", "Профили и клавиши");
     m_profile = new QComboBox; m_profile->addItems(Profiles::names());
     m_profile->setCurrentText(m_s->value("input.profile").toString());
-    p->addRow("Профиль", "При запуске игры из Dock выбирается профиль с её пакетом", m_profile);
+    p->addRow("Профиль", "Запасной режим ввода NEZER EMU", m_profile);
     m_pkg = new QLineEdit; m_pkg->setPlaceholderText("например com.axlebolt.standoff2");
     p->addRow("Пакет игры", {}, m_pkg);
     m_table = new QTableWidget(0, 5); m_table->setHorizontalHeaderLabels({"Действие", "Клавиша", "X", "Y", "Край L/C/R"});
     m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch); m_table->verticalHeader()->hide(); m_table->setMinimumHeight(300);
     p->body()->addWidget(m_table);
-    p->addNote("Координаты задаются для экрана 1920×1080 и привязываются к левому (L), центральному (C) или правому (R) краю: так раскладка точно адаптируется к 4:3, 16:10, 16:9 и 21:9. "
-               "Позиции по умолчанию — шаблон: сверьте их с кнопками в вашей игре. WASD — джойстик, ЛКМ — огонь, ПКМ — прицел.");
+    p->addNote("Для игр в BlueStacks удобнее встроенный редактор управления (Ctrl+Shift+A). Координаты здесь задаются для экрана 1920×1080 и привязываются к левому (L), центральному (C) или правому (R) краю.");
     auto* pr = new QHBoxLayout;
     auto* add = new QPushButton("+ Клавиша"); auto* del = new QPushButton("Удалить строку"); auto* np = new QPushButton("Новый профиль");
     auto* sv = new QPushButton("Сохранить"); sv->setObjectName("primary");
@@ -143,6 +141,17 @@ void SettingsDialog::saveProfileFromTable() {
 
 QWidget* SettingsDialog::pageAppearance() {
     auto* c = new Card("brush", "Оформление");
+    auto* st = new QComboBox;
+    for (const Theme::Style& s : Theme::styles()) st->addItem(s.name, s.id);
+    st->setCurrentIndex(qMax(0, st->findData(m_s->value("appearance.style").toString())));
+    c->addRow("Стиль оформления", "Цвета окон, панелей и акцент. Полностью применяется после перезапуска NEZER EMU", st);
+    connect(st, &QComboBox::activated, this, [this, st] {
+        const QString id = st->currentData().toString();
+        set("appearance.style", id);
+        set("appearance.accent", Theme::style(id).accent);
+        Theme::applyStyle(id);
+        emit appearanceChanged();
+    });
     auto thumb = [](const QString& key, SettingsStore* s) {
         QString path = s->value(key).toString();
         if (path.isEmpty()) path = Paths::assetsDir() + (key.contains("lock") ? "/wallpaper_lock.jpg" : "/wallpaper_main.jpg");
@@ -166,7 +175,7 @@ QWidget* SettingsDialog::pageAppearance() {
         connect(def, &QPushButton::clicked, this, [this, key, lbl, thumb] { set(key, ""); lbl->setPixmap(thumb(key, m_s)); emit appearanceChanged(); });
     }
     auto* sw = new QHBoxLayout;
-    for (const char* hex : {"#8b5cf6", "#ef4444", "#3b82f6", "#22c55e"}) {
+    for (const char* hex : {"#8b5cf6", "#00e5b3", "#ef4444", "#3b82f6", "#22c55e", "#f59e0b"}) {
         auto* b = new QPushButton; b->setFixedSize(40, 40); b->setCursor(Qt::PointingHandCursor);
         b->setStyleSheet(QString("QPushButton{background:%1;border-radius:10px;border:2px solid %2;}").arg(hex, QColor(hex) == Theme::accent(m_s->value("appearance.accent").toString()) ? "white" : "transparent"));
         const QString h = hex;
@@ -176,7 +185,7 @@ QWidget* SettingsDialog::pageAppearance() {
     auto* custom = new QPushButton("Свой…");
     connect(custom, &QPushButton::clicked, this, [this] { const QColor c = QColorDialog::getColor(Theme::accent(m_s->value("appearance.accent").toString()), this); if (c.isValid()) { set("appearance.accent", c.name()); emit appearanceChanged(); } });
     sw->addWidget(custom); sw->addStretch();
-    c->addRow("Цвет интерфейса", "Применяется сразу (цвет тумблеров — после переоткрытия настроек)", nullptr); c->body()->addLayout(sw);
+    c->addRow("Цвет акцента", "Можно сменить отдельно от стиля. Цвет тумблеров обновится после переоткрытия настроек", nullptr); c->body()->addLayout(sw);
     auto* op = new QSlider(Qt::Horizontal); op->setRange(10, 100); op->setValue(m_s->value("appearance.dockOpacity").toInt()); op->setFixedWidth(170);
     auto* opl = new QLabel(QString("%1%").arg(op->value()));
     auto* oh = new QWidget; auto* ohl = new QHBoxLayout(oh); ohl->setContentsMargins(0, 0, 0, 0); ohl->addWidget(op); ohl->addWidget(opl);
@@ -187,7 +196,7 @@ QWidget* SettingsDialog::pageAppearance() {
 
 QWidget* SettingsDialog::pageExtra() {
     auto* c = new Card("extra", "Дополнительно");
-    c->addNote("NEZER EMU " NEZER_VERSION ". Основа: официальный Android Emulator (AOSP). Интерфейс: Qt 6.");
+    c->addNote("NEZER EMU " NEZER_VERSION ". Основа: BlueStacks 5 (устанавливается отдельно). Интерфейс: Qt 6.");
     auto* upd = new QPushButton("Проверить обновления"); auto* updNote = c->addNote({});
     auto* checker = new UpdateChecker(m_s, this);
     connect(upd, &QPushButton::clicked, checker, &UpdateChecker::check);
@@ -195,12 +204,12 @@ QWidget* SettingsDialog::pageExtra() {
         updNote->setText(text);
         if (url.isValid() && QMessageBox::question(nullptr, "NEZER EMU", text + "\nОткрыть страницу загрузки?") == QMessageBox::Yes) QDesktopServices::openUrl(url);
     });
-    auto* log = new QPushButton("Журнал Android Emulator"); connect(log, &QPushButton::clicked, this, &SettingsDialog::logRequested);
+    auto* log = new QPushButton("Журнал NEZER EMU / BlueStacks"); connect(log, &QPushButton::clicked, this, &SettingsDialog::logRequested);
     auto* folder = new QPushButton("Открыть папку данных"); connect(folder, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::dataDir())); });
     auto* shots = new QPushButton("Открыть папку скриншотов"); connect(shots, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::screenshotsDir())); });
     auto* reset = new QPushButton("Сбросить настройки NEZER EMU");
     connect(reset, &QPushButton::clicked, this, [this] {
-        if (QMessageBox::question(this, "NEZER EMU", "Сбросить все настройки? Приложения и данные Android не затрагиваются.") != QMessageBox::Yes) return;
+        if (QMessageBox::question(this, "NEZER EMU", "Сбросить все настройки? Приложения и данные Android в BlueStacks не затрагиваются.") != QMessageBox::Yes) return;
         m_s->resetToDefaults({"dock."}); m_s->save(); emit appearanceChanged(); emit inputChanged(); close();
     });
     for (auto* b : {upd, log, folder, shots, reset}) c->body()->addWidget(b);

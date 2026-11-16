@@ -22,6 +22,7 @@ int main(int argc, char** argv) {
     }
     SettingsStore settings;
     settings.load();
+    Theme::applyStyle(settings.value("appearance.style").toString());
     app.setStyleSheet(Theme::globalStyle(settings.value("appearance.accent").toString()));
     MainWindow w(&settings);
     w.show();

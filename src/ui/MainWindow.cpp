@@ -5,7 +5,6 @@
 #include "Dock.h"
 #include "LockScreen.h"
 #include "SettingsDialog.h"
-#include "SetupWizard.h"
 #include "SideToolbar.h"
 #include "Theme.h"
 #include "TitleBar.h"
@@ -16,12 +15,14 @@
 #include "display/FpsMonitor.h"
 #include "engine/AdbClient.h"
 #include "engine/ApkInspector.h"
+#include "engine/BlueStacks.h"
 #include "engine/EmuConsole.h"
 #include "input/GameInput.h"
 #include "settings/SettingsStore.h"
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDialog>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -39,10 +40,24 @@
 #include <QStackedWidget>
 #include <QTimer>
 #include <QToolButton>
+#include <QUrl>
 #include <QVBoxLayout>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <windowsx.h>
+#endif
+
+#ifdef Q_OS_WIN
+// Ctrl+Shift+<vk> в окно с фокусом (BlueStacks): Ctrl+Shift+A открывает редактор игрового управления.
+static void sendCtrlShift(WORD vk) {
+    INPUT in[6]{};
+    for (INPUT& i : in) i.type = INPUT_KEYBOARD;
+    in[0].ki.wVk = VK_CONTROL; in[1].ki.wVk = VK_SHIFT; in[2].ki.wVk = vk;
+    in[3].ki.wVk = vk; in[3].ki.dwFlags = KEYEVENTF_KEYUP;
+    in[4].ki.wVk = VK_SHIFT; in[4].ki.dwFlags = KEYEVENTF_KEYUP;
+    in[5].ki.wVk = VK_CONTROL; in[5].ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(6, in, sizeof(INPUT));
+}
 #endif
 
 MainWindow::MainWindow(SettingsStore* s, QWidget* parent) : QWidget(parent), m_s(s) {
@@ -96,20 +111,13 @@ MainWindow::MainWindow(SettingsStore* s, QWidget* parent) : QWidget(parent), m_s
     connect(m_apps, &AppManager::dockChanged, this, &MainWindow::refreshDock);
 
     connect(m_engine, &AndroidEngine::stateChanged, this, &MainWindow::onState);
-    connect(m_engine, &AndroidEngine::windowReady, this, [this](quintptr h) { m_android->attach(h); m_android->host()->setChildInputEnabled(!m_game->isCaptured()); });
+    connect(m_engine, &AndroidEngine::windowReady, this, [this](quintptr h) { m_android->attach(h); m_android->host()->setChildInputEnabled(true); });
     connect(m_engine, &AndroidEngine::appsChanged, m_apps, &AppManager::setInstalled);
     connect(m_engine, &AndroidEngine::logLine, this, [this](const QString& l) { m_log << l; if (m_log.size() > 4000) m_log.removeFirst(); });
     connect(m_engine->fps(), &FpsMonitor::sample, this, [this](double fps, double frameMs, double jitter) {
-        m_fpsText = fps < 0 ? "FPS: н/д (образ не отдаёт счётчик)" : QString("FPS %1 · кадр %2 мс · разброс %3 мс").arg(fps, 0, 'f', 1).arg(frameMs, 0, 'f', 1).arg(jitter, 0, 'f', 1);
+        m_fpsText = fps < 0 ? "FPS: н/д" : QString("FPS %1 · кадр %2 мс · разброс %3 мс").arg(fps, 0, 'f', 1).arg(frameMs, 0, 'f', 1).arg(jitter, 0, 'f', 1);
         updateTitle();
     });
-    connect(m_game, &GameInput::latencyUpdated, this, [this](double avg, double p95, int) { m_latText = QString("ввод %1 мс (p95 %2)").arg(avg, 0, 'f', 2).arg(p95, 0, 'f', 2); updateTitle(); });
-    connect(m_game, &GameInput::capturedChanged, this, [this](bool on) {
-        m_android->host()->setChildInputEnabled(!on);
-        m_flash = on ? "Курсор захвачен (` или Esc — освободить)" : QString();
-        updateTitle();
-    });
-    connect(m_game, &GameInput::armedChanged, this, [this](bool on) { m_tool->setChecked("keymap", on); if (on) showAndroid(); });
 
     auto* fs = new QShortcut(QKeySequence(Qt::Key_F11), this); connect(fs, &QShortcut::activated, this, [this] { onToolbar("fullscreen"); });
     auto* home = new QShortcut(QKeySequence("Ctrl+H"), this); connect(home, &QShortcut::activated, this, &MainWindow::showDesktop);
@@ -124,6 +132,8 @@ MainWindow::MainWindow(SettingsStore* s, QWidget* parent) : QWidget(parent), m_s
 }
 
 void MainWindow::applyAppearance() {
+    Theme::applyStyle(m_s->value("appearance.style").toString());
+    setStyleSheet(QString("MainWindow{background:%1;}").arg(Theme::kBg));
     const QString accent = m_s->value("appearance.accent").toString();
     const QColor ac = Theme::accent(accent);
     ToggleSwitch::accent = ac;
@@ -178,9 +188,8 @@ void MainWindow::updateTitle() {
     const S st = m_engine->state();
     QStringList parts{m_engine->message()};
     if (!m_fpsText.isEmpty()) parts << m_fpsText;
-    if (!m_latText.isEmpty() && m_game->isArmed()) parts << m_latText;
     if (!m_flash.isEmpty()) parts << m_flash;
-    const QColor dot = st == S::Ready ? QColor("#4ade80") : st == S::Error ? QColor("#f87171") : (st == S::Starting || st == S::Booting) ? QColor("#fbbf24") : QColor("#a59ec4");
+    const QColor dot = st == S::Ready ? QColor("#4ade80") : st == S::Error ? QColor("#f87171") : (st == S::Starting || st == S::Booting) ? QColor("#fbbf24") : QColor(Theme::kMuted);
     m_title->setStatus(parts.join("   ·   "), dot);
 }
 
@@ -195,30 +204,41 @@ void MainWindow::refreshDock() {
 
 void MainWindow::launch(const QString& pkg) {
     if (m_engine->state() != AndroidEngine::State::Ready) return;
-    const QString prof = Profiles::forPackage(pkg);
-    if (!prof.isEmpty()) { m_s->setValue("input.profile", prof); m_s->save(); m_game->setProfile(Profiles::load(prof)); }
     m_engine->adb()->launch(pkg);
     showAndroid();
 }
 
 void MainWindow::onToolbar(const QString& id) {
     AdbClient* adb = m_engine->adb();
+    const bool ready = m_engine->state() == AndroidEngine::State::Ready;
     if (id == "fullscreen") { isFullScreen() ? showNormal() : showFullScreen(); m_title->setVisible(!isFullScreen()); }
     else if (id == "settings") openSettings(0);
     else if (id == "profiles") openSettings(4);
-    else if (id == "home") { if (m_engine->state() == AndroidEngine::State::Ready) adb->keyEvent(3); showDesktop(); }
+    else if (id == "home") { if (ready) adb->keyEvent(3); showDesktop(); }
     else if (id == "android") showAndroid();
     else if (id == "keymap") {
-        m_game->setArmed(!m_game->isArmed());
-        if (m_game->isArmed()) { m_flash = "Игровой режим: нажмите ` для захвата курсора"; updateTitle(); }
-        else { m_flash.clear(); updateTitle(); }
+        if (!ready) { QMessageBox::information(this, "NEZER EMU", "Сначала дождитесь запуска Android."); return; }
+        showAndroid();
+        QTimer::singleShot(250, this, [this] {
+            m_android->host()->focusChild();
+#ifdef Q_OS_WIN
+            sendCtrlShift('A');
+#endif
+            m_flash = "Игровое управление BlueStacks (Ctrl+Shift+A)"; updateTitle();
+            QTimer::singleShot(5000, this, [this] { m_flash.clear(); updateTitle(); });
+        });
     }
     else if (id == "volume") {
         QMenu m; m.addAction("Громче", this, [adb] { adb->keyEvent(24); }); m.addAction("Тише", this, [adb] { adb->keyEvent(25); });
         m.addAction("Без звука / со звуком", this, [adb] { adb->keyEvent(164); });
         m.exec(QCursor::pos());
     }
-    else if (id == "rotate") m_engine->console()->send("rotate");
+    else if (id == "rotate") {
+        if (!ready) return;
+        static int rot = 0;
+        rot = rot ? 0 : 1;
+        adb->shell(QString("settings put system accelerometer_rotation 0 && settings put system user_rotation %1").arg(rot), nullptr);
+    }
     else if (id == "apk") installApk();
     else if (id == "screenshot") {
         const QString out = Paths::screenshotsDir() + "/NEZER_" + QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss") + ".png";
@@ -236,7 +256,7 @@ void MainWindow::installApk(const QString& given) {
     const QString note = ApkInspector::compatibilityNote(info, m_engine->deviceAbi());
     if (QMessageBox::question(this, "Установка APK", QFileInfo(path).fileName() + "\n\n" + note + "\n\nУстановить?") != QMessageBox::Yes) return;
     m_flash = "Установка " + QFileInfo(path).fileName() + "…"; updateTitle();
-    m_engine->adb()->install(path, [this, path](int code, QString out) {
+    m_engine->adb()->install(path, [this](int code, QString out) {
         m_flash.clear(); updateTitle();
         if (code == 0 && out.contains("Success")) { QMessageBox::information(this, "NEZER EMU", "Приложение установлено."); m_engine->refreshApps(); }
         else QMessageBox::warning(this, "NEZER EMU", ApkInspector::explainInstallError(out));
@@ -253,19 +273,37 @@ void MainWindow::openSettings(int section) {
     d.exec();
 }
 
+// Вместо загрузки Android SDK: проверяем, что BlueStacks 5 установлен.
 void MainWindow::openSetup() {
     m_setupShown = true;
-    if (m_engine->state() == AndroidEngine::State::Ready || m_engine->state() == AndroidEngine::State::Booting) m_engine->stop();
-    SetupWizard w(m_s, this);
-    const bool ok = w.exec() == QDialog::Accepted;
-    m_engine->refreshInstalledState();
-    if (ok) m_engine->start();
+    for (;;) {
+        m_engine->refreshInstalledState();
+        const AndroidEngine::State st = m_engine->state();
+        if (st != AndroidEngine::State::NotInstalled) {
+            if (st == AndroidEngine::State::Stopped || st == AndroidEngine::State::Error) m_engine->start();
+            return;
+        }
+        QMessageBox box(this);
+        box.setWindowTitle("NEZER EMU");
+        box.setIcon(QMessageBox::Information);
+        box.setText("Для работы NEZER EMU нужен BlueStacks 5.");
+        box.setInformativeText("1. Скачайте и установите BlueStacks 5 с официального сайта.\n"
+                               "2. Запустите его один раз и закройте.\n"
+                               "3. Нажмите «Проверить снова».\n\n"
+                               "NEZER EMU встроит окно BlueStacks в свой интерфейс и будет управлять Android через ADB.");
+        QPushButton* dl = box.addButton("Скачать BlueStacks", QMessageBox::ActionRole);
+        QPushButton* again = box.addButton("Проверить снова", QMessageBox::AcceptRole);
+        box.addButton("Позже", QMessageBox::RejectRole);
+        box.exec();
+        if (box.clickedButton() == dl) { QDesktopServices::openUrl(QUrl(QString::fromLatin1(BlueStacks::kDownloadUrl))); continue; }
+        if (box.clickedButton() != again) return;
+    }
 }
 
 void MainWindow::showLog() {
-    QDialog d(this); d.setWindowTitle("Журнал Android Emulator"); d.resize(860, 520);
+    QDialog d(this); d.setWindowTitle("Журнал NEZER EMU / BlueStacks"); d.resize(860, 520);
     auto* v = new QVBoxLayout(&d); auto* t = new QPlainTextEdit; t->setReadOnly(true);
-    t->setPlainText(m_log.isEmpty() ? "Журнал пуст: эмулятор ещё не запускался." : m_log.join('\n'));
+    t->setPlainText(m_log.isEmpty() ? "Журнал пуст: BlueStacks ещё не запускался." : m_log.join('\n'));
     auto* close = new QPushButton("Закрыть"); connect(close, &QPushButton::clicked, &d, &QDialog::accept);
     v->addWidget(t); v->addWidget(close, 0, Qt::AlignRight); d.exec();
 }
@@ -273,7 +311,7 @@ void MainWindow::showLog() {
 void MainWindow::closeEvent(QCloseEvent* e) {
     m_s->setValue("window.geometry", QString::fromLatin1(saveGeometry().toBase64())); m_s->save();
     m_game->setArmed(false);
-    m_engine->stop();   // эмулятор завершается штатно и сохраняет состояние
+    m_engine->stop();   // BlueStacks закрывается штатно и сохраняет данные
     e->accept();
 }
 

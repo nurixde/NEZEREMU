@@ -1,11 +1,11 @@
 #include "AdbClient.h"
 #include "AdbParsers.h"
+#include "BlueStacks.h"
 #include "ProcUtil.h"
-#include "core/Paths.h"
 #include <QFile>
 
 void AdbClient::run(const QStringList& args, int timeoutMs, Cb cb) {
-    ProcUtil::run(this, Paths::adbExe(), QStringList{"-s", m_serial} + args, timeoutMs, cb);
+    ProcUtil::run(this, BlueStacks::adbExe(), QStringList{"-s", m_serial} + args, timeoutMs, cb);
 }
 void AdbClient::shell(const QString& cmd, Cb cb, int t) { run({"shell", cmd}, t, cb); }
 

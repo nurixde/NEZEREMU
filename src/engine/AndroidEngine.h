@@ -1,12 +1,14 @@
 #pragma once
 #include "AvdConfig.h"
+#include <QMap>
 #include <QObject>
 #include <QSize>
 #include <QStringList>
 #include <QTimer>
-class SettingsStore; class AdbClient; class EmuConsole; class EmulatorProcess; class FpsMonitor;
+class SettingsStore; class AdbClient; class EmuConsole; class FpsMonitor;
 
-// Фасад Android-движка: запуск, загрузка, готовность, список приложений.
+// Фасад Android-движка поверх BlueStacks 5: запуск HD-Player, поиск его окна для встраивания,
+// готовность Android и список приложений через HD-Adb.
 class AndroidEngine : public QObject {
     Q_OBJECT
 public:
@@ -21,6 +23,7 @@ public:
     QString message() const { return m_msg; }
     QStringList apps() const { return m_apps; }
     QString deviceAbi() const { return m_abi; }
+    QString instance() const;
     QSize screenSize() const;
     AvdParams params() const;
     static void modeDefaults(const QString& mode, int* cores, int* ramMb, int* priority);
@@ -38,8 +41,16 @@ signals:
     void logLine(const QString& line);
 private:
     void setState(State s, const QString& m);
+    void scanWindow();
     void pollBoot();
-    SettingsStore* m_s; AdbClient* m_adb; EmuConsole* m_console; EmulatorProcess* m_proc; FpsMonitor* m_fps;
+    void watch();
+    QMap<QString, QString> confChanges() const;
+    SettingsStore* m_s; AdbClient* m_adb; EmuConsole* m_console; FpsMonitor* m_fps;
     State m_state = State::Stopped; QString m_msg; QStringList m_apps; QString m_abi = "x86_64";
-    QTimer m_boot; int m_bootTries = 0;
+    QString m_inst;
+    QTimer m_scan, m_boot, m_watch;
+    int m_scanTries = 0, m_bootTries = 0;
+    bool m_polling = false;
+    quintptr m_hwnd = 0;
+    quint32 m_pid = 0;
 };

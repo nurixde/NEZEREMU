@@ -4,18 +4,23 @@
 #include "Widgets.h"
 #include "core/WinUtil.h"
 #include "engine/AndroidEngine.h"
+#include "engine/BlueStacks.h"
 #include "input/GameInput.h"
 #include "settings/SettingsStore.h"
 #include <QComboBox>
+#include <QDesktopServices>
+#include <QDir>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QProcess>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QThread>
+#include <QUrl>
 #include <QVBoxLayout>
 #include "core/SystemCheck.h"
 
@@ -26,16 +31,16 @@ SettingsDialog::SettingsDialog(SettingsStore* s, AndroidEngine* e, GameInput* g,
     setWindowTitle("NEZER EMU — Настройки"); resize(1080, 700); setMinimumSize(900, 560);
     ToggleSwitch::accent = Theme::accent(m_s->value("appearance.accent").toString());
     auto* root = new QHBoxLayout(this); root->setContentsMargins(0, 0, 0, 0); root->setSpacing(0);
-    auto* side = new QWidget; side->setFixedWidth(250); side->setStyleSheet(QString("background:%1;").arg("#120c25"));
+    auto* side = new QWidget; side->setFixedWidth(250); side->setStyleSheet(QString("background:%1;").arg(Theme::kSide));
     auto* sv = new QVBoxLayout(side); sv->setContentsMargins(10, 18, 10, 14);
     auto* head = new QLabel("  Настройки"); head->setStyleSheet("font-size:18px;font-weight:700;padding:4px 0 12px 4px;");
     m_menu = new QListWidget; m_menu->setIconSize(QSize(18, 18));
     const QList<QPair<QString, QString>> sections = {{"general", "Основные"}, {"chip", "Производительность"}, {"monitor", "Экран и разрешение"},
-        {"graphics", "Графика"}, {"mouse", "Управление и чувствительность"}, {"android", "Система Android"},
+        {"graphics", "Графика"}, {"mouse", "Управление и чувствительность"}, {"android", "BlueStacks и Android"},
         {"brush", "Оформление"}, {"extra", "Дополнительно"}};
     for (const auto& sc : sections) m_menu->addItem(new QListWidgetItem(Icons::get(sc.first, QColor("#d9d2f5")), sc.second));
     sv->addWidget(head); sv->addWidget(m_menu, 1);
-    auto* ver = new QLabel("  Версия " NEZER_VERSION); ver->setStyleSheet("color:#a59ec4;font-size:11px;"); sv->addWidget(ver);
+    auto* ver = new QLabel("  Версия " NEZER_VERSION); ver->setStyleSheet(QString("color:%1;font-size:11px;").arg(Theme::kMuted)); sv->addWidget(ver);
     m_pages = new QStackedWidget;
     m_pages->addWidget(pageGeneral()); m_pages->addWidget(pagePerf()); m_pages->addWidget(pageScreen()); m_pages->addWidget(pageGraphics());
     m_pages->addWidget(pageInput()); m_pages->addWidget(pageAndroid()); m_pages->addWidget(pageAppearance()); m_pages->addWidget(pageExtra());
@@ -69,12 +74,12 @@ QWidget* SettingsDialog::pageGeneral() {
     c->addRow("Запоминать размер окна", "Восстанавливать последний размер", rem);
     connect(rem, &QAbstractButton::toggled, this, [this](bool on) { set("general.rememberSize", on); });
     auto* autoAndroid = toggle(m_s->value("general.autoAndroid", true).toBool());
-    c->addRow("Запускать Android сразу", "Android стартует, пока показан экран блокировки", autoAndroid);
+    c->addRow("Запускать Android сразу", "BlueStacks стартует, пока показан экран блокировки", autoAndroid);
     connect(autoAndroid, &QAbstractButton::toggled, this, [this](bool on) { set("general.autoAndroid", on); });
     auto* lang = new QComboBox; lang->addItem("Русский"); lang->setEnabled(false); lang->setToolTip("Другие языки пока не переведены");
     c->addRow("Язык интерфейса", {}, lang);
     auto* keys = new Card("keyboard", "Горячие клавиши");
-    keys->addNote("F11 — полный экран\n` (ё) — захват/освобождение курсора в игровом режиме\nEsc — освободить курсор\nCtrl+H — рабочий стол NEZER EMU");
+    keys->addNote("F11 — полный экран\nCtrl+H — рабочий стол NEZER EMU\nCtrl+Shift+A — редактор игрового управления BlueStacks");
     return page({c, keys});
 }
 
@@ -104,7 +109,7 @@ QWidget* SettingsDialog::pagePerf() {
     auto* prio = toggle(m_s->value("perf.highPriority").toBool());
     c->addRow("Высокий приоритет процесса", "Меньше рывков при фоновой нагрузке", prio);
     connect(prio, &QAbstractButton::toggled, this, [this](bool on) { set("perf.highPriority", on); });
-    m_restartNote = c->addNote("Изменения CPU и RAM применятся после перезапуска Android."); m_restartNote->hide();
+    m_restartNote = c->addNote("CPU и RAM записываются в BlueStacks и применятся после перезапуска Android."); m_restartNote->hide();
     auto* restart = new QPushButton("Перезапустить Android"); c->body()->addWidget(restart);
     connect(restart, &QPushButton::clicked, m_e, &AndroidEngine::restart);
 
@@ -113,12 +118,12 @@ QWidget* SettingsDialog::pagePerf() {
     for (int v : {30, 60, 90, 120, 144, 165, 240}) fps->addItem(QString("%1 FPS").arg(v), v);
     fps->addItem("Без ограничения", 0);
     fps->setCurrentIndex(qMax(0, fps->findData(m_s->value("perf.fps").toInt())));
-    f->addRow("Лимит FPS", "Частота дисплея Android. Итоговый FPS также зависит от самой игры и видеокарты", fps);
+    f->addRow("Лимит FPS", "Лимит кадров BlueStacks. Итоговый FPS также зависит от самой игры и видеокарты", fps);
     connect(fps, &QComboBox::activated, this, [this, fps] { set("perf.fps", fps->currentData()); m_e->applyFrameRate(); m_restartNote->show(); });
     auto* show = toggle(m_s->value("perf.showFps").toBool());
     f->addRow("Показывать реальный FPS", "Измеряется по счётчику кадров Android, в верхней панели", show);
     connect(show, &QAbstractButton::toggled, this, [this](bool on) { set("perf.showFps", on); emit appearanceChanged(); });
-    f->addNote("«Без ограничения» выставляет максимальную частоту дисплея, которую сообщает эмулятору NEZER EMU (240). Настоящего «безлимита» в Android Emulator нет: число в панели FPS покажет реальный результат.");
+    f->addNote("«Без ограничения» выставляет 240 FPS в BlueStacks. При лимите выше 60 автоматически включается «Высокая частота кадров». Применяется при следующем запуске BlueStacks.");
     return page({c, f});
 }
 
@@ -141,7 +146,7 @@ QWidget* SettingsDialog::pageScreen() {
     orient->setCurrent(m_s->value("screen.orientation").toString() == "portrait" ? 1 : 0);
     c->addRow("Ориентация экрана", {}, nullptr); c->body()->addWidget(orient);
     auto* apply = new QPushButton("Применить"); apply->setObjectName("primary"); c->body()->addWidget(apply);
-    auto* note = c->addNote("Разрешение передаётся в Android (конфигурация устройства + wm size/density), а не просто растягивает картинку. Размер дисплея устройства полностью применяется после перезапуска Android.");
+    auto* note = c->addNote("Разрешение и DPI записываются в настройки BlueStacks и полностью применяются после перезапуска Android (сразу — через wm size/density).");
     connect(apply, &QPushButton::clicked, this, [this, w, h, dpi, orient, note] {
         set("screen.width", w->value()); set("screen.height", h->value()); set("screen.dpi", dpi->value());
         set("screen.orientation", orient->current() == 1 ? "portrait" : "landscape");
@@ -156,40 +161,49 @@ QWidget* SettingsDialog::pageScreen() {
 QWidget* SettingsDialog::pageGraphics() {
     auto* c = new Card("graphics", "Графика");
     auto* r = new QComboBox;
-    r->addItem("Аппаратный (видеокарта ПК)", "host"); r->addItem("Авто", "auto");
-    r->addItem("ANGLE (DirectX)", "angle_indirect"); r->addItem("Программный (SwiftShader, медленно)", "swiftshader_indirect");
-    r->setCurrentIndex(qMax(0, r->findData(m_s->value("gfx.mode").toString())));
-    c->addRow("Рендеринг", "Режим GPU Android Emulator", r);
-    connect(r, &QComboBox::activated, this, [this, r] { set("gfx.mode", r->currentData()); });
-    c->addNote("Аппаратный режим даёт максимальный FPS. Если есть чёрный экран или вылеты, обновите драйвер видеокарты или попробуйте ANGLE. Применяется после перезапуска Android.");
+    r->addItem("DirectX (рекомендуется)", "dx"); r->addItem("OpenGL", "gl"); r->addItem("Vulkan", "vlcn");
+    r->setCurrentIndex(qMax(0, r->findData(m_s->value("gfx.bsRenderer").toString())));
+    c->addRow("Рендеринг", "Графический движок BlueStacks", r);
+    connect(r, &QComboBox::activated, this, [this, r] { set("gfx.bsRenderer", r->currentData()); });
+    c->addNote("DirectX обычно самый стабильный. Если чёрный экран или вылеты, обновите драйвер видеокарты или попробуйте OpenGL. Применяется после перезапуска Android.");
     auto* restart = new QPushButton("Перезапустить Android"); c->body()->addWidget(restart);
     connect(restart, &QPushButton::clicked, m_e, &AndroidEngine::restart);
     return page({c});
 }
 
 QWidget* SettingsDialog::pageAndroid() {
-    auto* c = new Card("android", "Система Android");
+    auto* c = new Card("android", "BlueStacks и Android");
     m_androidState = c->addNote({});
-    c->addNote(QString("Образ: Android %1, %2, x86_64 (с трансляцией ARM-приложений)").arg(m_s->value("android.api").toInt() == 34 ? "14 (API 34)" : m_s->value("android.api").toString(), m_s->value("android.image").toString()));
+    const BlueStacks::Install bs = BlueStacks::detect();
+    c->addNote(bs.found ? "BlueStacks: " + QDir::toNativeSeparators(bs.installDir) : QString("BlueStacks 5 не найден на этом ПК."));
+    auto* inst = new QComboBox;
+    const QStringList list = BlueStacks::instances();
+    for (const QString& n : list) inst->addItem(n);
+    if (list.isEmpty()) inst->addItem(m_e->instance());
+    inst->setCurrentText(m_e->instance());
+    c->addRow("Экземпляр Android", "Pie64 = Android 9, Rvc64 = Android 11, Tiramisu64 = Android 13. Новые создаются в «Менеджере окон» BlueStacks", inst);
+    connect(inst, &QComboBox::activated, this, [this, inst] { set("bs.instance", inst->currentText()); });
     auto* row = new QHBoxLayout;
     auto* start = new QPushButton("Запустить"); auto* stop = new QPushButton("Остановить"); auto* rs = new QPushButton("Перезапустить");
     row->addWidget(start); row->addWidget(stop); row->addWidget(rs); c->body()->addLayout(row);
     connect(start, &QPushButton::clicked, m_e, &AndroidEngine::start); connect(stop, &QPushButton::clicked, m_e, &AndroidEngine::stop); connect(rs, &QPushButton::clicked, m_e, &AndroidEngine::restart);
-    auto* cold = toggle(m_s->value("android.coldBoot").toBool());
-    c->addRow("Холодный запуск", "Не использовать быстрый снимок (дольше, но надёжнее)", cold);
-    connect(cold, &QAbstractButton::toggled, this, [this](bool on) { set("android.coldBoot", on); });
-    auto* reinstall = new QPushButton("Проверка системы и переустановка компонентов…");
-    connect(reinstall, &QPushButton::clicked, this, [this] { emit setupRequested(); });
-    auto* wipe = new QPushButton("Сбросить данные Android…");
-    connect(wipe, &QPushButton::clicked, this, [this] {
-        if (QMessageBox::warning(this, "NEZER EMU", "Все приложения и данные внутри Android будут удалены при следующем запуске. Продолжить?",
-                                 QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) { set("android.wipeNext", true); m_e->restart(); }
+    auto* apply = toggle(m_s->value("bs.applySettings").toBool());
+    c->addRow("Передавать настройки в BlueStacks", "CPU, RAM, разрешение, DPI, FPS и рендер записываются в bluestacks.conf перед запуском", apply);
+    connect(apply, &QAbstractButton::toggled, this, [this](bool on) { set("bs.applySettings", on); });
+    auto* mim = new QPushButton("Менеджер окон BlueStacks");
+    connect(mim, &QPushButton::clicked, this, [this] {
+        const BlueStacks::Install b = BlueStacks::detect();
+        if (!b.found || !QProcess::startDetached(b.multiInstance, {})) QMessageBox::information(this, "NEZER EMU", "Менеджер окон BlueStacks не найден.");
     });
-    c->body()->addWidget(reinstall); c->body()->addWidget(wipe);
-    c->addNote("Приложения и данные Android сохраняются между запусками и при обновлении NEZER EMU (%LOCALAPPDATA%\\NezerEmu\\avd).");
+    auto* dl = new QPushButton("Скачать BlueStacks 5");
+    connect(dl, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(QString::fromLatin1(BlueStacks::kDownloadUrl))); });
+    auto* check = new QPushButton("Проверить установку BlueStacks…");
+    connect(check, &QPushButton::clicked, this, [this] { emit setupRequested(); });
+    c->body()->addWidget(mim); c->body()->addWidget(dl); c->body()->addWidget(check);
+    c->addNote("Если Android не определяется: в BlueStacks откройте Настройки → Дополнительно и включите «Android Debug Bridge (ADB)». Приложения и данные Android хранит сам BlueStacks.");
     auto* compat = new Card("general", "Совместимость игр");
     compat->addNote("Перед установкой APK NEZER EMU проверяет архитектуры нативных библиотек (ARM/x86) и объясняет ошибки установки.\n\n"
-                    "Важно: часть игр (например, с античитом) может обнаружить эмулятор и отказаться запускаться или перенаправить в особые лобби. Это решает разработчик игры, и NEZER EMU не обходит такие защиты.");
+                    "Игровое управление (клавиши и мышь) настраивается встроенным редактором BlueStacks: кнопка «Управление» справа или Ctrl+Shift+A.");
     return page({c, compat});
 }
 
@@ -197,12 +211,12 @@ void SettingsDialog::timerEvent(QTimerEvent*) {
     if (m_androidState) m_androidState->setText("Состояние: " + m_e->message() + (m_e->state() == AndroidEngine::State::Ready ? "  •  ABI: " + m_e->deviceAbi() : QString()));
     if (m_latency && m_g) {
         auto& L = m_g->latency();
-        m_latency->setText(L.count() ? QString("Задержка ввода (мышь → подтверждение эмулятора): средняя %1 мс, 95-й перцентиль %2 мс, макс %3 мс, событий %4")
+        m_latency->setText(L.count() ? QString("Задержка ввода: средняя %1 мс, 95-й перцентиль %2 мс, макс %3 мс, событий %4")
                                                 .arg(L.avg(), 0, 'f', 2).arg(L.percentile(95), 0, 'f', 2).arg(L.max(), 0, 'f', 2).arg(L.count())
-                                          : QString("Задержка ввода: нет данных. Включите игровой режим, захватите курсор и подвигайте мышью."));
+                                          : QString("Задержка ввода: нет данных. С BlueStacks ввод идёт напрямую в его окно."));
         const QPointF r = m_g->testRaw(), o = m_g->testOut();
         const QString kx = r.x() != 0 ? QString::number(o.x() / r.x(), 'f', 4) : "—", ky = r.y() != 0 ? QString::number(o.y() / r.y(), 'f', 4) : "—";
-        m_accuracy->setText(QString("Тест точности: сырые отсчёты X %1 / Y %2 → смещение пальца X %3 / Y %4 px. Коэффициент X %5, Y %6 (без сглаживания он постоянный = без ускорения).")
+        m_accuracy->setText(QString("Тест точности: сырые отсчёты X %1 / Y %2 → смещение пальца X %3 / Y %4 px. Коэффициент X %5, Y %6.")
                                 .arg(r.x()).arg(r.y()).arg(o.x(), 0, 'f', 1).arg(o.y(), 0, 'f', 1).arg(kx, ky));
     }
 }
