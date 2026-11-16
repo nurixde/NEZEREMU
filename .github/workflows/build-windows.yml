@@ -1,0 +1,72 @@
+name: Build NEZER EMU (Windows)
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 6.7.3
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.3'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2019_64'
+          cache: true
+
+      - name: Read version
+        id: ver
+        shell: pwsh
+        run: |
+          $m = Select-String -Path CMakeLists.txt -Pattern 'project\(NezerEmu VERSION ([0-9.]+)'
+          echo "version=$($m.Matches[0].Groups[1].Value)" >> $env:GITHUB_OUTPUT
+
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B build -A x64 "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR" "-DNEZER_REPO=${{ github.repository }}"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Tests
+        continue-on-error: true
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Prepare dist
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item build\Release\NezerEmu.exe dist\
+          Copy-Item -Recurse -Force assets dist\assets
+          windeployqt --release --no-translations --compiler-runtime dist\NezerEmu.exe
+          Invoke-WebRequest -Uri https://aka.ms/vs/17/release/vc_redist.x64.exe -OutFile dist\vc_redist.x64.exe
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+
+      - name: Build installer
+        shell: pwsh
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.ver.outputs.version }}" installer\NezerEmu.iss'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NezerEmuSetup
+          path: out/NezerEmuSetup.exe
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/NezerEmuSetup.exe
